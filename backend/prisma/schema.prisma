@@ -1,0 +1,209 @@
+// Prisma schema for Monitoring App
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User model
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  firstName    String?  @map("first_name")
+  lastName     String?  @map("last_name")
+  role         String   @default("user") // admin, manager, user
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  companies     UserCompany[]
+  samples       Sample[]
+  alerts        Alert[]        @relation("ResolvedBy")
+  baselines     Baseline[]
+
+  @@map("users")
+}
+
+// Company model
+model Company {
+  id        String   @id @default(uuid())
+  name      String
+  address   String?
+  status    String   @default("active") // active, inactive
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  users     UserCompany[]
+  factories Factory[]
+
+  @@map("companies")
+}
+
+// User-Company membership (many-to-many)
+model UserCompany {
+  userId    String  @map("user_id")
+  companyId String  @map("company_id")
+  role      String  @default("member") // owner, admin, member
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@id([userId, companyId])
+  @@map("user_companies")
+}
+
+// Factory/Location model
+model Factory {
+  id        String   @id @default(uuid())
+  companyId String   @map("company_id")
+  name      String
+  location  String?
+  address   String?
+  status    String   @default("operational") // operational, maintenance, offline
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  machines Machine[]
+
+  @@map("factories")
+}
+
+// Machine model
+model Machine {
+  id               String    @id @default(uuid())
+  factoryId        String    @map("factory_id")
+  name             String
+  type             String?
+  manufacturer     String?
+  model            String?
+  serialNumber     String?   @map("serial_number")
+  installationDate DateTime? @map("installation_date")
+  status           String    @default("healthy") // healthy, warning, critical, maintenance
+  healthScore      Int       @default(100) @map("health_score")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  factory   Factory    @relation(fields: [factoryId], references: [id], onDelete: Cascade)
+  samples   Sample[]
+  alerts    Alert[]
+  baselines Baseline[]
+
+  @@map("machines")
+}
+
+// Sample (vibration recording) model
+model Sample {
+  id         String   @id @default(uuid())
+  machineId  String   @map("machine_id")
+  userId     String?  @map("user_id")
+  name       String?
+  notes      String?
+  duration   Float? // in seconds
+  sampleRate Int?     @map("sample_rate") // Hz
+  isBaseline Boolean  @default(false) @map("is_baseline")
+  s3Key      String?  @map("s3_key") // CSV file location in S3
+  recordedAt DateTime @default(now()) @map("recorded_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Relations
+  machine  Machine        @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  user     User?          @relation(fields: [userId], references: [id])
+  metrics  SampleMetrics?
+  alerts   Alert[]
+  baseline Baseline?
+
+  @@map("samples")
+}
+
+// Sample metrics (computed statistics)
+model SampleMetrics {
+  id       String @id @default(uuid())
+  sampleId String @unique @map("sample_id")
+
+  // RMS values
+  rmsX Float? @map("rms_x")
+  rmsY Float? @map("rms_y")
+  rmsZ Float? @map("rms_z")
+
+  // Peak values
+  peakX Float? @map("peak_x")
+  peakY Float? @map("peak_y")
+  peakZ Float? @map("peak_z")
+
+  // Crest factor
+  crestFactorX Float? @map("crest_factor_x")
+  crestFactorY Float? @map("crest_factor_y")
+  crestFactorZ Float? @map("crest_factor_z")
+
+  // Kurtosis
+  kurtosisX Float? @map("kurtosis_x")
+  kurtosisY Float? @map("kurtosis_y")
+  kurtosisZ Float? @map("kurtosis_z")
+
+  // Skewness
+  skewnessX Float? @map("skewness_x")
+  skewnessY Float? @map("skewness_y")
+  skewnessZ Float? @map("skewness_z")
+
+  // Standard deviation
+  stdDevX Float? @map("std_dev_x")
+  stdDevY Float? @map("std_dev_y")
+  stdDevZ Float? @map("std_dev_z")
+
+  // Computed health score
+  computedHealthScore Int? @map("computed_health_score")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  sample Sample @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+
+  @@map("sample_metrics")
+}
+
+// Alert model
+model Alert {
+  id          String    @id @default(uuid())
+  machineId   String    @map("machine_id")
+  sampleId    String?   @map("sample_id")
+  type        String // critical, warning, info
+  severity    String // high, medium, low
+  title       String
+  description String?
+  isResolved  Boolean   @default(false) @map("is_resolved")
+  resolvedAt  DateTime? @map("resolved_at")
+  resolvedBy  String?   @map("resolved_by")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  machine      Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  sample       Sample? @relation(fields: [sampleId], references: [id])
+  resolvedUser User?   @relation("ResolvedBy", fields: [resolvedBy], references: [id])
+
+  @@map("alerts")
+}
+
+// Baseline model (active baseline for a machine)
+model Baseline {
+  id        String   @id @default(uuid())
+  machineId String   @map("machine_id")
+  sampleId  String   @unique @map("sample_id")
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  createdBy String?  @map("created_by")
+
+  // Relations
+  machine Machine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  sample  Sample  @relation(fields: [sampleId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [createdBy], references: [id])
+
+  @@map("baselines")
+}
