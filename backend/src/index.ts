@@ -19,7 +19,7 @@ import reportRoutes from './routes/reports';
 
 const app = express();
 //const PORT = process.env.PORT || 3001;
-const PORT = Number(process.env.PORT) || 3001;
+
 // Middleware
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:5173',
@@ -63,9 +63,14 @@ app.use((req, res) => {
 //   console.log(`🚀 Server running on http://localhost:${PORT}`);
 //   console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
 // });
+if (!process.env.PORT) {
+  console.warn('Warning: PORT environment variable not set. This may cause 502 errors in production.');
+}
+
+const PORT = Number(process.env.PORT || 8080);
+
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Server listening on port ${PORT}`);
 });
 
 export default app;
