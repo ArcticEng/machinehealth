@@ -36,6 +36,7 @@ class AccelerometerService {
   private sampleRate = 60; // Target samples per second
   private lastSampleTime = 0;
   private minSampleInterval: number;
+  private motionHandler: ((event: DeviceMotionEvent) => void) | null = null;
 
   constructor() {
     this.minSampleInterval = 1000 / this.sampleRate;
@@ -47,6 +48,7 @@ class AccelerometerService {
       try {
         const permission = await (DeviceMotionEvent as any).requestPermission();
         this.permissionGranted = permission === 'granted';
+        console.log('iOS permission result:', permission);
         return this.permissionGranted;
       } catch (error) {
         console.error('Permission request failed:', error);
@@ -60,7 +62,9 @@ class AccelerometerService {
   }
 
   isSupported(): boolean {
-    return 'DeviceMotionEvent' in window;
+    const supported = 'DeviceMotionEvent' in window;
+    console.log('DeviceMotionEvent supported:', supported);
+    return supported;
   }
 
   private handleMotion = (event: DeviceMotionEvent) => {
@@ -74,15 +78,35 @@ class AccelerometerService {
     }
     this.lastSampleTime = now;
 
-    const acceleration = event.accelerationIncludingGravity || event.acceleration;
+    // Try different acceleration sources
+    let acceleration = event.accelerationIncludingGravity;
     
-    if (!acceleration) return;
+    // Fallback to acceleration without gravity
+    if (!acceleration || (acceleration.x === null && acceleration.y === null && acceleration.z === null)) {
+      acceleration = event.acceleration;
+    }
+    
+    // If still no data, log and return
+    if (!acceleration) {
+      console.warn('No acceleration data in motion event');
+      return;
+    }
+
+    // Handle null values (some devices return null instead of 0)
+    const x = acceleration.x ?? 0;
+    const y = acceleration.y ?? 0;
+    const z = acceleration.z ?? 0;
+
+    // Skip if all values are 0 (might indicate sensor not working)
+    if (x === 0 && y === 0 && z === 0) {
+      return;
+    }
 
     const dataPoint: AccelerometerData = {
       time: (now - this.startTime) / 1000, // Convert to seconds
-      x: acceleration.x || 0,
-      y: acceleration.y || 0,
-      z: acceleration.z || 0,
+      x,
+      y,
+      z,
       timestamp: Date.now()
     };
 
@@ -99,25 +123,45 @@ class AccelerometerService {
       return false;
     }
 
-    if (!this.permissionGranted) {
-      console.error('Permission not granted');
-      return false;
+    // For Android, we don't need explicit permission
+    // but we should still request it for consistency
+    if (!this.permissionGranted && typeof (DeviceMotionEvent as any).requestPermission !== 'function') {
+      this.permissionGranted = true;
     }
 
+    console.log('Starting accelerometer recording...');
+    
     this.isRecording = true;
     this.data = [];
     this.startTime = performance.now();
     this.lastSampleTime = 0;
     this.onDataCallback = onData || null;
 
-    window.addEventListener('devicemotion', this.handleMotion);
+    // Remove any existing listener first
+    if (this.motionHandler) {
+      window.removeEventListener('devicemotion', this.motionHandler);
+    }
+
+    // Store reference to handler for cleanup
+    this.motionHandler = this.handleMotion;
     
+    // Add event listener with options for better performance
+    window.addEventListener('devicemotion', this.handleMotion, { passive: true });
+    
+    console.log('Accelerometer event listener added');
     return true;
   }
 
   stopRecording(): AccelerometerData[] {
+    console.log('Stopping accelerometer recording, collected', this.data.length, 'samples');
+    
     this.isRecording = false;
-    window.removeEventListener('devicemotion', this.handleMotion);
+    
+    if (this.motionHandler) {
+      window.removeEventListener('devicemotion', this.motionHandler);
+      this.motionHandler = null;
+    }
+    
     this.onDataCallback = null;
     
     return [...this.data];
@@ -177,19 +221,23 @@ class AccelerometerService {
   }
 
   private calculateRMS(values: number[]): number {
+    if (values.length === 0) return 0;
     const sum = values.reduce((acc, val) => acc + val * val, 0);
     return Math.sqrt(sum / values.length);
   }
 
   private calculatePeak(values: number[]): number {
+    if (values.length === 0) return 0;
     return Math.max(...values.map(Math.abs));
   }
 
   private calculateMean(values: number[]): number {
+    if (values.length === 0) return 0;
     return values.reduce((a, b) => a + b, 0) / values.length;
   }
 
   private calculateStdDev(values: number[]): number {
+    if (values.length === 0) return 0;
     const mean = this.calculateMean(values);
     const variance = values.reduce((acc, val) => acc + (val - mean) ** 2, 0) / values.length;
     return Math.sqrt(variance);
@@ -202,6 +250,7 @@ class AccelerometerService {
   }
 
   private calculateKurtosis(values: number[]): number {
+    if (values.length === 0) return 0;
     const mean = this.calculateMean(values);
     const n = values.length;
     const stdDev = this.calculateStdDev(values);
@@ -214,6 +263,7 @@ class AccelerometerService {
   }
 
   private calculateSkewness(values: number[]): number {
+    if (values.length === 0) return 0;
     const mean = this.calculateMean(values);
     const n = values.length;
     const stdDev = this.calculateStdDev(values);
