@@ -26,7 +26,7 @@ router.post('/generate', authenticate, async (req: AuthRequest, res: Response) =
       SELECT m.id, m.name, m.type, m.status, m.health_score,
              f.name as factory_name, f.id as factory_id,
              c.name as company_name, c.id as company_id,
-             m.last_maintenance
+             m.last_maintenance_at
       FROM machines m
       JOIN factories f ON m.factory_id = f.id
       JOIN companies c ON f.company_id = c.id
@@ -52,7 +52,7 @@ router.post('/generate', authenticate, async (req: AuthRequest, res: Response) =
       healthScore: m.health_score || 100,
       status: m.status,
       factoryName: m.factory_name,
-      lastMaintenance: m.last_maintenance
+      lastMaintenance: m.last_maintenance_at
     }));
 
     // Get alerts
