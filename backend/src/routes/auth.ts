@@ -7,6 +7,9 @@ import { authenticate, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
+const JWT_SECRET = process.env.JWT_SECRET || 'default-secret-key-change-in-production';
+const JWT_EXPIRES_IN = '7d';
+
 // Register
 router.post(
   '/register',
@@ -47,8 +50,8 @@ router.post(
       // Generate token
       const token = jwt.sign(
         { userId: user.id },
-        process.env.JWT_SECRET || 'default-secret',
-        { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+        JWT_SECRET,
+        { expiresIn: JWT_EXPIRES_IN }
       );
 
       res.status(201).json({
@@ -107,8 +110,8 @@ router.post(
       // Generate token
       const token = jwt.sign(
         { userId: user.id },
-        process.env.JWT_SECRET || 'default-secret',
-        { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+        JWT_SECRET,
+        { expiresIn: JWT_EXPIRES_IN }
       );
 
       res.json({

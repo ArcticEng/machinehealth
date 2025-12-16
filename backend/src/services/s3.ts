@@ -18,11 +18,42 @@ const s3Client = new S3Client({
 const BUCKET_NAME = process.env.AWS_S3_BUCKET || 'machinehealth-reports';
 
 /**
+ * Upload file to S3 (used by samples)
+ */
+export async function uploadToS3(
+  key: string, 
+  content: string | Buffer, 
+  contentType: string = 'application/json'
+): Promise<{ key: string; url: string }> {
+  const command = new PutObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: key,
+    Body: content,
+    ContentType: contentType,
+  });
+  
+  await s3Client.send(command);
+  
+  const url = await generatePresignedUrl(key);
+  
+  return { key, url };
+}
+
+/**
+ * Generate presigned URL for download (used by samples)
+ */
+export async function generatePresignedUrl(key: string, expiresIn: number = 3600): Promise<string> {
+  const command = new GetObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: key,
+  });
+  
+  return getSignedUrl(s3Client, command, { expiresIn });
+}
+
+/**
  * Generate S3 key path with folder structure:
  * users/{userId}/companies/{companyId}/factories/{factoryId}/machines/{machineId}/reports/{date}/{filename}
- * 
- * Or for company-wide reports:
- * users/{userId}/companies/{companyId}/reports/{date}/{filename}
  */
 export function generateReportKey(params: {
   userId: string;
@@ -96,7 +127,6 @@ export async function uploadReport(params: {
   
   await s3Client.send(command);
   
-  // Generate a signed URL for immediate access
   const url = await getSignedDownloadUrl(key);
   
   return { key, url };
@@ -160,12 +190,10 @@ export async function listReports(params: {
     return [];
   }
   
-  // Sort by date descending (newest first)
   const sorted = response.Contents.sort((a, b) => {
     return (b.LastModified?.getTime() || 0) - (a.LastModified?.getTime() || 0);
   });
   
-  // Generate signed URLs for each report
   const reports = await Promise.all(
     sorted.map(async (item) => {
       const key = item.Key || '';
@@ -173,7 +201,7 @@ export async function listReports(params: {
       
       return {
         key,
-        filename: filename.replace(/^\d+-/, ''), // Remove timestamp prefix
+        filename: filename.replace(/^\d+-/, ''),
         size: item.Size || 0,
         lastModified: item.LastModified || new Date(),
         url: await getSignedDownloadUrl(key),
@@ -215,6 +243,8 @@ export async function getReportContent(key: string): Promise<string> {
 }
 
 export default {
+  uploadToS3,
+  generatePresignedUrl,
   uploadReport,
   getSignedDownloadUrl,
   listReports,

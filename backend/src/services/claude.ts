@@ -451,7 +451,7 @@ function generateFallbackAnalysis(deviations: Record<string, number | null>): An
     recommendations,
     predictedTimeToFailure: severity === 'critical' ? 'Days to weeks' : 
                            severity === 'high' ? 'Weeks to months' : 
-                           null,
+                           undefined,
     confidenceScore: 0.7,
     generatedAt: new Date().toISOString()
   };
