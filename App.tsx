@@ -98,7 +98,7 @@ export default function App() {
 
   return (
     <div className={isDarkMode ? 'dark' : ''}>
-      <div className="min-h-screen max-w-md mx-auto text-foreground flex flex-col">
+      <div className="min-h-screen min-h-[100dvh] max-w-md mx-auto text-foreground flex flex-col bg-background">
         {isAuthenticated && (
           <AppHeader 
             isDarkMode={isDarkMode}
@@ -110,7 +110,8 @@ export default function App() {
           />
         )}
 
-        <div className="flex-1 overflow-auto">
+        {/* Main scrollable content with bottom padding for fixed nav */}
+        <main className={`flex-1 overflow-y-auto overflow-x-hidden ${showBottomNav ? 'pb-20' : ''}`}>
           <AnimatePresence mode="wait">
             <motion.div
               key={currentScreen}
@@ -118,7 +119,6 @@ export default function App() {
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
               transition={{ duration: 0.3 }}
-              className="h-full"
             >
               <ScreenRenderer
                 currentScreen={currentScreen}
@@ -132,8 +132,9 @@ export default function App() {
               />
             </motion.div>
           </AnimatePresence>
-        </div>
+        </main>
 
+        {/* Fixed bottom navigation */}
         {showBottomNav && (
           <BottomNavigation 
             currentScreen={currentScreen}
