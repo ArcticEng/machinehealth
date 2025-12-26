@@ -41,8 +41,13 @@ interface Alert {
   createdAt: string;
 }
 
-// Static chart data for demo
-const healthData = [
+interface HealthTrendPoint {
+  time: string;
+  health: number;
+}
+
+// Fallback chart data if no real data available
+const fallbackHealthData = [
   { time: '00:00', health: 95 },
   { time: '04:00', health: 93 },
   { time: '08:00', health: 89 },
@@ -101,7 +106,9 @@ const formatTimeAgo = (dateString: string) => {
 export default function HomeScreen({ onNavigate, onNavigateToAssets, userName }: HomeScreenProps) {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [healthTrends, setHealthTrends] = useState<HealthTrendPoint[]>(fallbackHealthData);
   const [isLoading, setIsLoading] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
 
   useEffect(() => {
     const loadData = async () => {
@@ -112,6 +119,31 @@ export default function HomeScreen({ onNavigate, onNavigateToAssets, userName }:
         ]);
         setDashboard(dashboardData);
         setAlerts(alertsData.slice(0, 3)); // Show only first 3 alerts
+        setLastUpdated(new Date());
+        
+        // Try to fetch health trends
+        try {
+          const trendsData = await analyticsAPI.getHealthTrends(undefined, 'day');
+          if (trendsData && trendsData.length > 0) {
+            // Convert RMS values to a "health" percentage (inverse relationship)
+            // Higher vibration = lower health
+            const chartData = trendsData.map((point: any) => {
+              const avgRms = (point.avgRmsX + point.avgRmsY + point.avgRmsZ) / 3;
+              // Convert RMS to health score (0.5g baseline, higher = worse)
+              // Baseline of 0.5g = 100% health, 2g = 0% health
+              const health = Math.max(0, Math.min(100, 100 - ((avgRms - 0.5) / 1.5) * 100));
+              return {
+                time: new Date(point.time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+                health: Math.round(health)
+              };
+            });
+            if (chartData.length > 0) {
+              setHealthTrends(chartData);
+            }
+          }
+        } catch (trendError) {
+          console.log('Using fallback trend data');
+        }
       } catch (error) {
         console.error('Failed to load dashboard data:', error);
         // Use mock data if API fails
@@ -131,6 +163,14 @@ export default function HomeScreen({ onNavigate, onNavigateToAssets, userName }:
   }, []);
 
   const currentHealth = dashboard?.overallHealth || 82;
+  
+  const getLastUpdatedText = () => {
+    const diffMs = new Date().getTime() - lastUpdated.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 1) return 'just now';
+    if (diffMins === 1) return '1 minute ago';
+    return `${diffMins} minutes ago`;
+  };
 
   return (
     <div className="p-4 space-y-6 pb-20 min-h-screen bg-background text-foreground">
@@ -166,14 +206,14 @@ export default function HomeScreen({ onNavigate, onNavigateToAssets, userName }:
                     className={`h-full bg-gradient-to-r ${getHealthGradient(currentHealth)} shadow-lg`}
                   />
                 </div>
-                <p className="text-sm text-muted-foreground">Last updated 5 minutes ago</p>
+                <p className="text-sm text-muted-foreground">Last updated {getLastUpdatedText()}</p>
               </div>
             </div>
 
             {/* Trend Chart */}
             <div className="h-40 w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={healthData}>
+                <LineChart data={healthTrends}>
                   <XAxis
                     dataKey="time"
                     axisLine={false}

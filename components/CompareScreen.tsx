@@ -737,12 +737,12 @@ export default function CompareScreen() {
           <CardContent className="p-4">
             <div className="flex items-center gap-3">
               <Select value={selectedMachine} onValueChange={setSelectedMachine}>
-                <SelectTrigger className="flex-1 bg-background border-primary/50">
+                <SelectTrigger className="flex-1 bg-white dark:bg-background border-primary/50 text-foreground">
                   <SelectValue placeholder="Select machine" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="bg-white dark:bg-popover">
                   {machines.map((machine) => (
-                    <SelectItem key={machine.id} value={machine.id}>
+                    <SelectItem key={machine.id} value={machine.id} className="text-foreground">
                       <div className="flex flex-col">
                         <span className="font-medium">{machine.name}</span>
                         <span className="text-xs text-muted-foreground">{machine.factoryName}</span>
@@ -795,12 +795,12 @@ export default function CompareScreen() {
                 <CardContent className="p-4">
                   <label className="text-sm font-medium text-muted-foreground mb-2 block">Select Sample to Compare</label>
                   <Select value={selectedSample} onValueChange={setSelectedSample}>
-                    <SelectTrigger className="bg-background">
+                    <SelectTrigger className="bg-white dark:bg-background text-foreground">
                       <SelectValue placeholder="Select sample to compare" />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className="bg-white dark:bg-popover">
                       {samples.map((sample) => (
-                        <SelectItem key={sample.id} value={sample.id}>
+                        <SelectItem key={sample.id} value={sample.id} className="text-foreground">
                           <div className="flex items-center justify-between w-full gap-4">
                             <span className="font-medium">{sample.name}</span>
                             <span className="text-xs text-muted-foreground">{formatDate(sample.recordedAt)}</span>
@@ -854,54 +854,66 @@ export default function CompareScreen() {
 
             {/* SAMPLE VS SAMPLE TAB */}
             <TabsContent value="samples" className="space-y-4">
-              {/* Sample Selectors */}
+              {/* Sample Selectors - Stacked on mobile */}
               <Card>
-                <CardContent className="p-4 space-y-4">
-                  <div className="grid grid-cols-[1fr,auto,1fr] gap-3 items-end">
-                    {/* Sample 1 */}
-                    <div>
-                      <label className="text-xs font-medium text-muted-foreground mb-1 block">Sample 1 (Reference)</label>
-                      <Select value={sample1Id} onValueChange={setSample1Id}>
-                        <SelectTrigger className="bg-background border-blue-500/50">
-                          <SelectValue placeholder="Select first sample" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {samples.map((sample) => (
-                            <SelectItem key={sample.id} value={sample.id} disabled={sample.id === sample2Id}>
-                              <div className="flex flex-col">
-                                <span className="font-medium text-sm">{sample.name}</span>
-                                <span className="text-xs text-muted-foreground">{formatDate(sample.recordedAt)}</span>
-                              </div>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
+                <CardContent className="p-4 space-y-3">
+                  {/* Sample 1 */}
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Sample 1 (Reference)</label>
+                    <Select value={sample1Id} onValueChange={setSample1Id}>
+                      <SelectTrigger className="w-full bg-white dark:bg-background border-blue-500/50 text-foreground">
+                        <SelectValue placeholder="Select first sample" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-white dark:bg-popover">
+                        {samples.map((sample) => (
+                          <SelectItem 
+                            key={sample.id} 
+                            value={sample.id} 
+                            disabled={sample.id === sample2Id}
+                            className="text-foreground"
+                          >
+                            <div className="flex flex-col">
+                              <span className="font-medium text-sm">{sample.name}</span>
+                              <span className="text-xs text-muted-foreground">{formatDate(sample.recordedAt)}</span>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-                    {/* Arrow */}
-                    <div className="flex items-center justify-center pb-2">
-                      <ArrowRight className="h-5 w-5 text-muted-foreground" />
+                  {/* Arrow - centered */}
+                  <div className="flex items-center justify-center py-1">
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <div className="h-px w-8 bg-border" />
+                      <ArrowRight className="h-4 w-4 rotate-90" />
+                      <div className="h-px w-8 bg-border" />
                     </div>
+                  </div>
 
-                    {/* Sample 2 */}
-                    <div>
-                      <label className="text-xs font-medium text-muted-foreground mb-1 block">Sample 2 (Compare)</label>
-                      <Select value={sample2Id} onValueChange={setSample2Id}>
-                        <SelectTrigger className="bg-background border-purple-500/50">
-                          <SelectValue placeholder="Select second sample" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {samples.map((sample) => (
-                            <SelectItem key={sample.id} value={sample.id} disabled={sample.id === sample1Id}>
-                              <div className="flex flex-col">
-                                <span className="font-medium text-sm">{sample.name}</span>
-                                <span className="text-xs text-muted-foreground">{formatDate(sample.recordedAt)}</span>
-                              </div>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
+                  {/* Sample 2 */}
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Sample 2 (Compare)</label>
+                    <Select value={sample2Id} onValueChange={setSample2Id}>
+                      <SelectTrigger className="w-full bg-white dark:bg-background border-purple-500/50 text-foreground">
+                        <SelectValue placeholder="Select second sample" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-white dark:bg-popover">
+                        {samples.map((sample) => (
+                          <SelectItem 
+                            key={sample.id} 
+                            value={sample.id} 
+                            disabled={sample.id === sample1Id}
+                            className="text-foreground"
+                          >
+                            <div className="flex flex-col">
+                              <span className="font-medium text-sm">{sample.name}</span>
+                              <span className="text-xs text-muted-foreground">{formatDate(sample.recordedAt)}</span>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </CardContent>
               </Card>
