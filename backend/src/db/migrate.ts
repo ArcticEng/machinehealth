@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS machines (
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Samples table (vibration recordings)
+-- Samples table (vibration recordings - raw data stored in S3)
 CREATE TABLE IF NOT EXISTS samples (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   machine_id UUID REFERENCES machines(id) ON DELETE CASCADE,
@@ -78,13 +78,8 @@ CREATE TABLE IF NOT EXISTS samples (
   duration_seconds DECIMAL(10, 2),
   sample_rate INTEGER DEFAULT 100,
   data_points INTEGER,
-  -- Metrics stored as JSON for flexibility
   metrics JSONB,
-  -- Raw data can be stored in S3, this is the key
   s3_key VARCHAR(500),
-  s3_url VARCHAR(1000),
-  -- Or store directly as JSONB for smaller samples
-  raw_data JSONB,
   is_baseline BOOLEAN DEFAULT FALSE,
   recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -123,7 +118,7 @@ CREATE TABLE IF NOT EXISTS alerts (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Reports table (for saved reports in S3)
+-- Reports table (PDF reports stored in S3)
 CREATE TABLE IF NOT EXISTS reports (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -135,6 +130,20 @@ CREATE TABLE IF NOT EXISTS reports (
   period VARCHAR(50),
   report_type VARCHAR(50) DEFAULT 'maintenance',
   summary TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Comparisons table (AI comparison PDFs stored in S3)
+CREATE TABLE IF NOT EXISTS comparisons (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  machine_id UUID REFERENCES machines(id) ON DELETE CASCADE,
+  baseline_sample_id UUID REFERENCES samples(id) ON DELETE SET NULL,
+  current_sample_id UUID REFERENCES samples(id) ON DELETE SET NULL,
+  severity VARCHAR(50),
+  title VARCHAR(255),
+  summary TEXT,
+  s3_key VARCHAR(500) NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -155,6 +164,7 @@ CREATE TABLE IF NOT EXISTS maintenance_logs (
 -- Create indexes for better query performance
 CREATE INDEX IF NOT EXISTS idx_samples_machine_id ON samples(machine_id);
 CREATE INDEX IF NOT EXISTS idx_samples_recorded_at ON samples(recorded_at);
+CREATE INDEX IF NOT EXISTS idx_samples_s3_key ON samples(s3_key);
 CREATE INDEX IF NOT EXISTS idx_alerts_machine_id ON alerts(machine_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at);
 CREATE INDEX IF NOT EXISTS idx_machines_factory_id ON machines(factory_id);
@@ -162,6 +172,9 @@ CREATE INDEX IF NOT EXISTS idx_factories_company_id ON factories(company_id);
 CREATE INDEX IF NOT EXISTS idx_baselines_machine_id ON baselines(machine_id);
 CREATE INDEX IF NOT EXISTS idx_reports_user_id ON reports(user_id);
 CREATE INDEX IF NOT EXISTS idx_reports_created_at ON reports(created_at);
+CREATE INDEX IF NOT EXISTS idx_comparisons_user_id ON comparisons(user_id);
+CREATE INDEX IF NOT EXISTS idx_comparisons_machine_id ON comparisons(machine_id);
+CREATE INDEX IF NOT EXISTS idx_comparisons_created_at ON comparisons(created_at);
 
 -- Function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()

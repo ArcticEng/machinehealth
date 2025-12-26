@@ -6,6 +6,8 @@ import {
   generateMaintenanceReport,
   interpretVibrationPattern 
 } from '../services/claude';
+import { uploadComparisonPDF } from '../services/s3';
+import { generateComparisonPDF } from '../services/pdf';
 
 const router = Router();
 
@@ -54,13 +56,187 @@ router.post('/analyze', authenticate, async (req: AuthRequest, res: Response) =>
       historicalContext
     );
 
-    // Log the analysis
     console.log(`AI Analysis generated for ${machineName}: ${analysis.severity}`);
 
     res.json(analysis);
   } catch (error) {
     console.error('AI analysis error:', error);
     res.status(500).json({ error: 'Failed to generate AI analysis' });
+  }
+});
+
+// Save comparison analysis as PDF to S3
+router.post('/analyze/save', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const { 
+      machineId, 
+      baselineSampleId,
+      currentSampleId,
+      baselineMetrics, 
+      currentMetrics,
+      analysis 
+    } = req.body;
+
+    const userId = req.user!.id;
+
+    // Get machine and related info
+    const machineResult = await query(
+      `SELECT m.id, m.name, m.type,
+              f.id as factory_id, f.name as factory_name,
+              c.id as company_id, c.name as company_name
+       FROM machines m
+       JOIN factories f ON m.factory_id = f.id
+       JOIN companies c ON f.company_id = c.id
+       WHERE m.id = $1`,
+      [machineId]
+    );
+
+    if (machineResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Machine not found' });
+    }
+
+    const machine = machineResult.rows[0];
+
+    // Get sample names
+    let baselineName = 'Baseline';
+    let baselineDate = new Date().toISOString();
+    let currentName = 'Current Sample';
+    let currentDate = new Date().toISOString();
+
+    if (baselineSampleId) {
+      const baselineResult = await query(
+        'SELECT name, recorded_at FROM samples WHERE id = $1',
+        [baselineSampleId]
+      );
+      if (baselineResult.rows.length > 0) {
+        baselineName = baselineResult.rows[0].name;
+        baselineDate = baselineResult.rows[0].recorded_at;
+      }
+    }
+
+    if (currentSampleId) {
+      const currentResult = await query(
+        'SELECT name, recorded_at FROM samples WHERE id = $1',
+        [currentSampleId]
+      );
+      if (currentResult.rows.length > 0) {
+        currentName = currentResult.rows[0].name;
+        currentDate = currentResult.rows[0].recorded_at;
+      }
+    }
+
+    // Generate PDF
+    const pdfBuffer = await generateComparisonPDF({
+      machineName: machine.name,
+      machineType: machine.type || 'Industrial Equipment',
+      baselineName,
+      baselineDate,
+      currentSampleName: currentName,
+      currentSampleDate: currentDate,
+      baselineMetrics: baselineMetrics || {},
+      currentMetrics: currentMetrics || {},
+      analysis: analysis || {
+        severity: 'unknown',
+        title: 'Analysis',
+        summary: 'No analysis available',
+        findings: [],
+        possibleCauses: [],
+        recommendations: [],
+        confidenceScore: 0
+      }
+    });
+
+    // Upload to S3
+    const filename = `comparison-${machine.name.replace(/[^a-zA-Z0-9]/g, '_')}`;
+    const { key, url } = await uploadComparisonPDF({
+      userId,
+      companyId: machine.company_id,
+      factoryId: machine.factory_id,
+      machineId: machine.id,
+      filename,
+      pdfBuffer,
+      metadata: {
+        machineName: machine.name,
+        severity: analysis?.severity || 'unknown',
+        baselineSampleId: baselineSampleId || '',
+        currentSampleId: currentSampleId || '',
+      }
+    });
+
+    // Save reference to database
+    await query(
+      `INSERT INTO comparisons (
+        user_id, machine_id, baseline_sample_id, current_sample_id,
+        severity, title, summary, s3_key, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+      [
+        userId,
+        machineId,
+        baselineSampleId || null,
+        currentSampleId || null,
+        analysis?.severity || 'unknown',
+        analysis?.title || 'Comparison Analysis',
+        analysis?.summary || '',
+        key
+      ]
+    );
+
+    console.log(`Comparison saved to S3: ${key}`);
+
+    res.json({
+      success: true,
+      s3Key: key,
+      downloadUrl: url,
+      message: 'Comparison saved successfully'
+    });
+  } catch (error) {
+    console.error('Save comparison error:', error);
+    res.status(500).json({ error: 'Failed to save comparison' });
+  }
+});
+
+// Get saved comparisons for a machine
+router.get('/comparisons', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const { machineId, limit = '20' } = req.query;
+    const userId = req.user!.id;
+
+    let dbQuery = `
+      SELECT c.*, m.name as machine_name
+      FROM comparisons c
+      JOIN machines m ON c.machine_id = m.id
+      JOIN factories f ON m.factory_id = f.id
+      JOIN companies co ON f.company_id = co.id
+      WHERE c.user_id = $1
+        AND (co.owner_id = $1 OR co.id IN (SELECT company_id FROM user_companies WHERE user_id = $1))
+    `;
+    const params: any[] = [userId];
+
+    if (machineId) {
+      dbQuery += ` AND c.machine_id = $${params.length + 1}`;
+      params.push(machineId);
+    }
+
+    dbQuery += ` ORDER BY c.created_at DESC LIMIT $${params.length + 1}`;
+    params.push(parseInt(limit as string));
+
+    const result = await query(dbQuery, params);
+
+    const comparisons = result.rows.map(row => ({
+      id: row.id,
+      machineId: row.machine_id,
+      machineName: row.machine_name,
+      severity: row.severity,
+      title: row.title,
+      summary: row.summary,
+      createdAt: row.created_at,
+      s3Key: row.s3_key
+    }));
+
+    res.json(comparisons);
+  } catch (error) {
+    console.error('Get comparisons error:', error);
+    res.status(500).json({ error: 'Failed to get comparisons' });
   }
 });
 
@@ -75,7 +251,7 @@ router.post('/report', authenticate, async (req: AuthRequest, res: Response) => 
       SELECT m.id, m.name, m.type, m.status, m.health_score,
              f.name as factory_name, f.id as factory_id,
              c.name as company_name, c.id as company_id,
-             m.last_maintenance
+             m.last_maintenance_at
       FROM machines m
       JOIN factories f ON m.factory_id = f.id
       JOIN companies c ON f.company_id = c.id
@@ -98,7 +274,7 @@ router.post('/report', authenticate, async (req: AuthRequest, res: Response) => 
       healthScore: m.health_score || 100,
       status: m.status,
       factoryName: m.factory_name,
-      lastMaintenance: m.last_maintenance
+      lastMaintenance: m.last_maintenance_at
     }));
 
     // Get alerts

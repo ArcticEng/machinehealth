@@ -166,6 +166,13 @@ export const samplesAPI = {
     fetchAPI<any[]>(`/samples?machineId=${machineId}${limit ? `&limit=${limit}` : ''}`),
   
   getOne: (id: string) => fetchAPI<any>(`/samples/${id}`),
+
+  // Get raw data from S3
+  getRawData: (id: string) => fetchAPI<{
+    metadata: any;
+    metrics: any;
+    rawData: any[];
+  }>(`/samples/${id}/rawdata`),
   
   create: (data: {
     machineId: string;
@@ -264,6 +271,43 @@ export const aiAPI = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+
+  // Save comparison analysis as PDF to S3
+  saveComparison: (data: {
+    machineId: string;
+    baselineSampleId?: string;
+    currentSampleId?: string;
+    baselineMetrics: any;
+    currentMetrics: any;
+    analysis: any;
+  }) =>
+    fetchAPI<{
+      success: boolean;
+      s3Key: string;
+      downloadUrl: string;
+      message: string;
+    }>('/ai/analyze/save', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // Get saved comparisons
+  getComparisons: (machineId?: string, limit?: number) => {
+    const params = new URLSearchParams();
+    if (machineId) params.append('machineId', machineId);
+    if (limit) params.append('limit', String(limit));
+    const query = params.toString();
+    return fetchAPI<Array<{
+      id: string;
+      machineId: string;
+      machineName: string;
+      severity: string;
+      title: string;
+      summary: string;
+      createdAt: string;
+      s3Key: string;
+    }>>(`/ai/comparisons${query ? `?${query}` : ''}`);
+  },
   
   // Generate comprehensive report with AI
   generateReport: (data: { companyId?: string; factoryId?: string; period: string }) =>
@@ -331,9 +375,9 @@ export const aiAPI = {
     }),
 };
 
-// Reports API - S3 stored reports
+// Reports API - PDF reports stored in S3
 export const reportsAPI = {
-  // Generate and save a new report
+  // Generate and save a new report as PDF
   generate: (data: { 
     companyId?: string; 
     factoryId?: string; 

@@ -1,12 +1,13 @@
 import { Router, Response } from 'express';
 import { query } from '../db';
 import { authenticate, AuthRequest } from '../middleware/auth';
-import { uploadReport, listReports, getSignedDownloadUrl, deleteReport, getReportContent } from '../services/s3';
+import { uploadReportPDF, getSignedDownloadUrl, deleteReport } from '../services/s3';
 import { generateMaintenanceReport } from '../services/claude';
+import { generateReportPDF } from '../services/pdf';
 
 const router = Router();
 
-// Generate and save a new report
+// Generate and save a new report as PDF
 router.post('/generate', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const { companyId, factoryId, machineId, period, includeAiAnalysis = true } = req.body;
@@ -14,10 +15,19 @@ router.post('/generate', authenticate, async (req: AuthRequest, res: Response) =
 
     // Get company name for the report
     let companyName = 'All Companies';
+    let factoryName: string | undefined;
+    
     if (companyId && companyId !== 'all') {
       const companyResult = await query('SELECT name FROM companies WHERE id = $1', [companyId]);
       if (companyResult.rows.length > 0) {
         companyName = companyResult.rows[0].name;
+      }
+    }
+
+    if (factoryId && factoryId !== 'all') {
+      const factoryResult = await query('SELECT name FROM factories WHERE id = $1', [factoryId]);
+      if (factoryResult.rows.length > 0) {
+        factoryName = factoryResult.rows[0].name;
       }
     }
 
@@ -114,7 +124,13 @@ router.post('/generate', authenticate, async (req: AuthRequest, res: Response) =
 
     // Prepare full report data
     const fullReport = {
-      ...report,
+      title: report.title || `Machine Health Report - ${periodLabel}`,
+      generatedAt: report.generatedAt || new Date().toISOString(),
+      period: periodLabel,
+      companyName,
+      factoryName,
+      executiveSummary: report.executiveSummary,
+      healthOverview: report.healthOverview,
       machineHealth: {
         total: machines.length,
         healthy,
@@ -126,31 +142,31 @@ router.post('/generate', authenticate, async (req: AuthRequest, res: Response) =
         total: alerts.length,
         critical: alerts.filter((a: any) => a.severity === 'high').length
       },
+      criticalFindings: report.criticalFindings || [],
+      recommendations: report.recommendations || [],
+      maintenancePriorities: report.maintenancePriorities || [],
+      predictiveInsights: report.predictiveInsights,
       machines: machines.map((m: any) => ({
         name: m.name,
         factory: m.factoryName,
         health: m.healthScore,
         status: m.status,
         trend: m.healthScore > 85 ? 'stable' : m.healthScore > 70 ? 'declining' : 'critical'
-      })),
-      filters: {
-        companyId: companyId || 'all',
-        factoryId: factoryId || 'all',
-        machineId: machineId || 'all',
-        period
-      }
+      }))
     };
 
-    // Upload to S3
-    const filename = `report-${period}-${Date.now()}.json`;
-    const { key, url } = await uploadReport({
+    // Generate PDF
+    const pdfBuffer = await generateReportPDF(fullReport);
+
+    // Upload PDF to S3
+    const filename = `report-${period}-${Date.now()}`;
+    const { key, url } = await uploadReportPDF({
       userId,
       companyId: companyId !== 'all' ? companyId : undefined,
       factoryId: factoryId !== 'all' ? factoryId : undefined,
       machineId: machineId !== 'all' ? machineId : undefined,
       filename,
-      content: JSON.stringify(fullReport, null, 2),
-      contentType: 'application/json',
+      pdfBuffer,
       metadata: {
         reportType: 'maintenance',
         period,
@@ -169,11 +185,13 @@ router.post('/generate', authenticate, async (req: AuthRequest, res: Response) =
         factoryId !== 'all' ? factoryId : null,
         machineId !== 'all' ? machineId : null,
         key,
-        filename,
+        filename + '.pdf',
         period,
         fullReport.executiveSummary
       ]
     );
+
+    console.log(`Report PDF saved to S3: ${key}`);
 
     res.json({
       ...fullReport,
@@ -259,13 +277,14 @@ router.get('/:id', authenticate, async (req: AuthRequest, res: Response) => {
     }
 
     const report = result.rows[0];
-    
-    // Get report content from S3
-    const content = await getReportContent(report.s3_key);
     const downloadUrl = await getSignedDownloadUrl(report.s3_key);
 
     res.json({
-      ...JSON.parse(content),
+      id: report.id,
+      filename: report.filename,
+      period: report.period,
+      summary: report.summary,
+      createdAt: report.created_at,
       downloadUrl
     });
   } catch (error) {

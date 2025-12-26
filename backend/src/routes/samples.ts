@@ -2,11 +2,11 @@ import { Router, Response } from 'express';
 import { body, validationResult } from 'express-validator';
 import { query } from '../db';
 import { authenticate, AuthRequest } from '../middleware/auth';
-import { uploadToS3, generatePresignedUrl } from '../services/s3';
+import { uploadSampleData, getSampleData, deleteSampleData, generatePresignedUrl } from '../services/s3';
 
 const router = Router();
 
-// Get samples for a machine
+// Get samples for a machine (metadata only, no raw data)
 router.get('/', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const { machineId, limit = 50, offset = 0 } = req.query;
@@ -30,7 +30,9 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response) => {
     }
 
     const result = await query(
-      `SELECT s.*, u.first_name, u.last_name, u.email as recorded_by_email
+      `SELECT s.id, s.machine_id, s.name, s.notes, s.duration_seconds, s.sample_rate,
+              s.data_points, s.metrics, s.is_baseline, s.recorded_at, s.s3_key, s.created_at,
+              u.first_name, u.last_name, u.email as recorded_by_email
        FROM samples s
        LEFT JOIN users u ON s.recorded_by = u.id
        WHERE s.machine_id = $1
@@ -53,7 +55,7 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response) => {
       recordedBy: row.first_name 
         ? `${row.first_name} ${row.last_name || ''}`.trim() 
         : row.recorded_by_email,
-      s3Url: row.s3_url,
+      hasRawData: !!row.s3_key,
       createdAt: row.created_at
     }));
 
@@ -64,7 +66,7 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response) => {
   }
 });
 
-// Get single sample with raw data
+// Get single sample with raw data from S3
 router.get('/:id', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const result = await query(
@@ -84,7 +86,7 @@ router.get('/:id', authenticate, async (req: AuthRequest, res: Response) => {
 
     const row = result.rows[0];
 
-    // If data is in S3, generate presigned URL
+    // Get download URL for raw data if stored in S3
     let downloadUrl = null;
     if (row.s3_key) {
       try {
@@ -105,9 +107,9 @@ router.get('/:id', authenticate, async (req: AuthRequest, res: Response) => {
       sampleRate: row.sample_rate,
       dataPoints: row.data_points,
       metrics: row.metrics,
-      rawData: row.raw_data,
       isBaseline: row.is_baseline,
       recordedAt: row.recorded_at,
+      s3Key: row.s3_key,
       downloadUrl,
       createdAt: row.created_at
     });
@@ -117,7 +119,40 @@ router.get('/:id', authenticate, async (req: AuthRequest, res: Response) => {
   }
 });
 
-// Create sample (save recording)
+// Get raw data for a sample (fetches from S3)
+router.get('/:id/rawdata', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await query(
+      `SELECT s.s3_key FROM samples s
+       JOIN machines m ON s.machine_id = m.id
+       JOIN factories f ON m.factory_id = f.id
+       JOIN companies c ON f.company_id = c.id
+       WHERE s.id = $1
+         AND (c.owner_id = $2 OR c.id IN (SELECT company_id FROM user_companies WHERE user_id = $2))`,
+      [req.params.id, req.user!.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Sample not found' });
+    }
+
+    const { s3_key } = result.rows[0];
+
+    if (!s3_key) {
+      return res.status(404).json({ error: 'Raw data not available for this sample' });
+    }
+
+    // Fetch raw data from S3
+    const sampleData = await getSampleData(s3_key);
+    
+    res.json(sampleData);
+  } catch (error) {
+    console.error('Get raw data error:', error);
+    res.status(500).json({ error: 'Failed to get raw data' });
+  }
+});
+
+// Create sample (save recording) - stores raw data in S3
 router.post(
   '/',
   authenticate,
@@ -143,52 +178,65 @@ router.post(
         metrics, rawData, isBaseline = false 
       } = req.body;
 
-      // Verify machine access
-      const accessCheck = await query(
-        `SELECT m.id FROM machines m
+      const userId = req.user!.id;
+
+      // Get machine details for S3 path
+      const machineResult = await query(
+        `SELECT m.id, m.name as machine_name, 
+                f.id as factory_id, f.name as factory_name,
+                c.id as company_id, c.name as company_name, c.owner_id
+         FROM machines m
          JOIN factories f ON m.factory_id = f.id
          JOIN companies c ON f.company_id = c.id
          WHERE m.id = $1
            AND (c.owner_id = $2 OR c.id IN (SELECT company_id FROM user_companies WHERE user_id = $2))`,
-        [machineId, req.user!.id]
+        [machineId, userId]
       );
 
-      if (accessCheck.rows.length === 0) {
+      if (machineResult.rows.length === 0) {
         return res.status(403).json({ error: 'Not authorized to add sample to this machine' });
       }
 
-      // For large datasets, upload to S3
-      let s3Key = null;
-      let s3Url = null;
-      let storedRawData = rawData;
+      const machine = machineResult.rows[0];
 
-      if (rawData.length > 1000) {
-        // Upload to S3 for large samples
-        try {
-          const csvData = convertToCSV(rawData);
-          const fileName = `samples/${machineId}/${Date.now()}_${name.replace(/\s+/g, '_')}.csv`;
-          const uploadResult = await uploadToS3(fileName, csvData, 'text/csv');
-          s3Key = uploadResult.key;
-          s3Url = uploadResult.url;
-          storedRawData = null; // Don't store in DB
-        } catch (e) {
-          console.error('S3 upload failed, storing in DB:', e);
-          // Fall back to storing in DB
-        }
+      // Always upload raw data to S3
+      let s3Key = null;
+      try {
+        const uploadResult = await uploadSampleData({
+          userId,
+          companyId: machine.company_id,
+          factoryId: machine.factory_id,
+          machineId,
+          sampleName: name,
+          rawData,
+          metrics,
+          metadata: {
+            machineName: machine.machine_name,
+            factoryName: machine.factory_name,
+            companyName: machine.company_name,
+            durationSeconds: String(durationSeconds),
+            sampleRate: String(sampleRate),
+          }
+        });
+        s3Key = uploadResult.key;
+        console.log('Sample data uploaded to S3:', s3Key);
+      } catch (e) {
+        console.error('S3 upload failed:', e);
+        return res.status(500).json({ error: 'Failed to store sample data' });
       }
 
+      // Save sample reference to database (no raw data stored in DB)
       const result = await query(
         `INSERT INTO samples (
           machine_id, recorded_by, name, notes, duration_seconds, 
-          sample_rate, data_points, metrics, raw_data, s3_key, s3_url, is_baseline
+          sample_rate, data_points, metrics, s3_key, is_baseline
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING *`,
         [
-          machineId, req.user!.id, name, notes || null, durationSeconds,
+          machineId, userId, name, notes || null, durationSeconds,
           sampleRate, rawData.length, JSON.stringify(metrics), 
-          storedRawData ? JSON.stringify(storedRawData) : null,
-          s3Key, s3Url, isBaseline
+          s3Key, isBaseline
         ]
       );
 
@@ -206,7 +254,7 @@ router.post(
         await query(
           `INSERT INTO baselines (machine_id, sample_id, name, metrics, created_by)
            VALUES ($1, $2, $3, $4, $5)`,
-          [machineId, sample.id, name, JSON.stringify(metrics), req.user!.id]
+          [machineId, sample.id, name, JSON.stringify(metrics), userId]
         );
       }
 
@@ -220,7 +268,7 @@ router.post(
       );
 
       // Generate alerts if needed
-      await checkAndCreateAlerts(machineId, sample.id, metrics, req.user!.id);
+      await checkAndCreateAlerts(machineId, sample.id, metrics, userId);
 
       res.status(201).json({
         id: sample.id,
@@ -233,7 +281,7 @@ router.post(
         metrics: sample.metrics,
         isBaseline: sample.is_baseline,
         recordedAt: sample.recorded_at,
-        s3Url: sample.s3_url,
+        s3Key: sample.s3_key,
         createdAt: sample.created_at,
         healthScore,
         status
@@ -245,10 +293,10 @@ router.post(
   }
 );
 
-// Delete sample
+// Delete sample (also deletes from S3)
 router.delete('/:id', authenticate, async (req: AuthRequest, res: Response) => {
   try {
-    // Check access
+    // Check access and get S3 key
     const accessCheck = await query(
       `SELECT s.id, s.s3_key FROM samples s
        JOIN machines m ON s.machine_id = m.id
@@ -263,12 +311,22 @@ router.delete('/:id', authenticate, async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ error: 'Not authorized to delete this sample' });
     }
 
-    // TODO: Delete from S3 if needed
-    // if (accessCheck.rows[0].s3_key) {
-    //   await deleteFromS3(accessCheck.rows[0].s3_key);
-    // }
+    const { s3_key } = accessCheck.rows[0];
 
+    // Delete from S3
+    if (s3_key) {
+      try {
+        await deleteSampleData(s3_key);
+        console.log('Sample data deleted from S3:', s3_key);
+      } catch (e) {
+        console.error('Failed to delete from S3:', e);
+        // Continue with DB deletion even if S3 fails
+      }
+    }
+
+    // Delete from database
     await query('DELETE FROM samples WHERE id = $1', [req.params.id]);
+    
     res.json({ message: 'Sample deleted successfully' });
   } catch (error) {
     console.error('Delete sample error:', error);
@@ -276,11 +334,11 @@ router.delete('/:id', authenticate, async (req: AuthRequest, res: Response) => {
   }
 });
 
-// Export sample as CSV
+// Export sample as CSV (fetches from S3)
 router.get('/:id/export', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const result = await query(
-      `SELECT s.* FROM samples s
+      `SELECT s.name, s.s3_key FROM samples s
        JOIN machines m ON s.machine_id = m.id
        JOIN factories f ON m.factory_id = f.id
        JOIN companies c ON f.company_id = c.id
@@ -293,13 +351,20 @@ router.get('/:id/export', authenticate, async (req: AuthRequest, res: Response) 
       return res.status(404).json({ error: 'Sample not found' });
     }
 
-    const sample = result.rows[0];
-    const rawData = sample.raw_data || [];
+    const { name, s3_key } = result.rows[0];
+
+    if (!s3_key) {
+      return res.status(404).json({ error: 'Raw data not available for export' });
+    }
+
+    // Fetch raw data from S3
+    const sampleData = await getSampleData(s3_key);
+    const rawData = sampleData.rawData || [];
 
     const csv = convertToCSV(rawData);
     
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="${sample.name.replace(/\s+/g, '_')}.csv"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${name.replace(/\s+/g, '_')}.csv"`);
     res.send(csv);
   } catch (error) {
     console.error('Export sample error:', error);
@@ -318,12 +383,9 @@ function convertToCSV(data: any[]): string {
 }
 
 function calculateHealthScore(metrics: any): number {
-  // Simple health calculation based on RMS values and crest factors
   const rmsAvg = ((metrics.rmsX || 0) + (metrics.rmsY || 0) + (metrics.rmsZ || 0)) / 3;
   const crestAvg = ((metrics.crestFactorX || 0) + (metrics.crestFactorY || 0) + (metrics.crestFactorZ || 0)) / 3;
   
-  // Lower RMS and crest factor = better health
-  // These thresholds would be calibrated for real machinery
   let score = 100;
   
   if (rmsAvg > 2.0) score -= 30;
@@ -334,7 +396,6 @@ function calculateHealthScore(metrics: any): number {
   else if (crestAvg > 3.0) score -= 10;
   else if (crestAvg > 2.0) score -= 5;
   
-  // Kurtosis check (high kurtosis can indicate impulsive events)
   const kurtosisAvg = ((metrics.kurtosisX || 0) + (metrics.kurtosisY || 0) + (metrics.kurtosisZ || 0)) / 3;
   if (kurtosisAvg > 5) score -= 15;
   else if (kurtosisAvg > 3) score -= 5;
