@@ -1,18 +1,29 @@
 import { Router, Response } from 'express';
 import { body, validationResult } from 'express-validator';
 import { query } from '../db';
-import { authenticate, AuthRequest } from '../middleware/auth';
+import { authenticate, AuthRequest, requireSubscription, SUBSCRIPTION_LEVELS, getUserFeatures } from '../middleware/auth';
 import { uploadSampleData, getSampleData, deleteSampleData, generatePresignedUrl } from '../services/s3';
 
 const router = Router();
 
 // Get samples for a machine (metadata only, no raw data)
+// Level 1+ required to view saved samples
 router.get('/', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const { machineId, limit = 50, offset = 0 } = req.query;
 
     if (!machineId) {
       return res.status(400).json({ error: 'machineId is required' });
+    }
+
+    // Free users can't access saved samples
+    const userLevel = req.user!.subscription_level || 0;
+    if (userLevel < SUBSCRIPTION_LEVELS.BASIC) {
+      return res.status(403).json({ 
+        error: 'Subscription required',
+        message: 'Viewing saved samples requires a Basic subscription or higher',
+        requiredLevel: SUBSCRIPTION_LEVELS.BASIC
+      });
     }
 
     // Verify machine access
@@ -67,7 +78,8 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response) => {
 });
 
 // Get single sample with raw data from S3
-router.get('/:id', authenticate, async (req: AuthRequest, res: Response) => {
+// Level 1+ required
+router.get('/:id', authenticate, requireSubscription(SUBSCRIPTION_LEVELS.BASIC), async (req: AuthRequest, res: Response) => {
   try {
     const result = await query(
       `SELECT s.*, m.name as machine_name, f.name as factory_name
@@ -120,7 +132,8 @@ router.get('/:id', authenticate, async (req: AuthRequest, res: Response) => {
 });
 
 // Get raw data for a sample (fetches from S3)
-router.get('/:id/rawdata', authenticate, async (req: AuthRequest, res: Response) => {
+// Level 1+ required
+router.get('/:id/rawdata', authenticate, requireSubscription(SUBSCRIPTION_LEVELS.BASIC), async (req: AuthRequest, res: Response) => {
   try {
     const result = await query(
       `SELECT s.s3_key FROM samples s
@@ -153,6 +166,7 @@ router.get('/:id/rawdata', authenticate, async (req: AuthRequest, res: Response)
 });
 
 // Create sample (save recording) - stores raw data in S3
+// Level 1+ required to SAVE samples
 router.post(
   '/',
   authenticate,
@@ -171,6 +185,16 @@ router.post(
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
+      }
+
+      // Check subscription level for saving
+      const userLevel = req.user!.subscription_level || 0;
+      if (userLevel < SUBSCRIPTION_LEVELS.BASIC) {
+        return res.status(403).json({ 
+          error: 'Subscription required',
+          message: 'Saving samples requires a Basic subscription or higher. Free users can only record and view metrics in real-time.',
+          requiredLevel: SUBSCRIPTION_LEVELS.BASIC
+        });
       }
 
       const { 
@@ -294,7 +318,8 @@ router.post(
 );
 
 // Delete sample (also deletes from S3)
-router.delete('/:id', authenticate, async (req: AuthRequest, res: Response) => {
+// Level 1+ required
+router.delete('/:id', authenticate, requireSubscription(SUBSCRIPTION_LEVELS.BASIC), async (req: AuthRequest, res: Response) => {
   try {
     // Check access and get S3 key
     const accessCheck = await query(
@@ -335,7 +360,8 @@ router.delete('/:id', authenticate, async (req: AuthRequest, res: Response) => {
 });
 
 // Export sample as CSV (fetches from S3)
-router.get('/:id/export', authenticate, async (req: AuthRequest, res: Response) => {
+// Level 1+ required
+router.get('/:id/export', authenticate, requireSubscription(SUBSCRIPTION_LEVELS.BASIC), async (req: AuthRequest, res: Response) => {
   try {
     const result = await query(
       `SELECT s.name, s.s3_key FROM samples s

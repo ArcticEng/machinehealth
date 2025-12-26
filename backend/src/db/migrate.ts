@@ -13,7 +13,9 @@ CREATE TABLE IF NOT EXISTS users (
   last_name VARCHAR(100),
   role VARCHAR(50) DEFAULT 'user',
   subscription_tier VARCHAR(50) DEFAULT 'free',
+  subscription_level INTEGER DEFAULT 0,
   subscription_expires_at TIMESTAMP,
+  machine_limit INTEGER DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -175,15 +177,18 @@ CREATE INDEX IF NOT EXISTS idx_reports_created_at ON reports(created_at);
 CREATE INDEX IF NOT EXISTS idx_comparisons_user_id ON comparisons(user_id);
 CREATE INDEX IF NOT EXISTS idx_comparisons_machine_id ON comparisons(machine_id);
 CREATE INDEX IF NOT EXISTS idx_comparisons_created_at ON comparisons(created_at);
+`;
 
+// Function and trigger definitions need $$ which must be run separately
+const functionAndTriggers = `
 -- Function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER AS $trigger$
 BEGIN
     NEW.updated_at = CURRENT_TIMESTAMP;
     RETURN NEW;
 END;
-$$ language 'plpgsql';
+$trigger$ language 'plpgsql';
 
 -- Triggers for updated_at
 DROP TRIGGER IF EXISTS update_users_updated_at ON users;
@@ -207,10 +212,44 @@ CREATE TRIGGER update_baselines_updated_at BEFORE UPDATE ON baselines
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 `;
 
+// Add columns to existing tables (run separately with error handling)
+const addColumns = [
+  {
+    check: "SELECT column_name FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'subscription_level'",
+    add: "ALTER TABLE users ADD COLUMN subscription_level INTEGER DEFAULT 0"
+  },
+  {
+    check: "SELECT column_name FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'machine_limit'",
+    add: "ALTER TABLE users ADD COLUMN machine_limit INTEGER DEFAULT 0"
+  }
+];
+
 async function migrate() {
   try {
     console.log('🔄 Running database migrations...');
+    
+    // Run main migrations
     await pool.query(migrations);
+    console.log('✅ Tables created');
+    
+    // Run function and triggers
+    await pool.query(functionAndTriggers);
+    console.log('✅ Functions and triggers created');
+    
+    // Add columns if they don't exist
+    for (const col of addColumns) {
+      try {
+        const result = await pool.query(col.check);
+        if (result.rows.length === 0) {
+          await pool.query(col.add);
+          console.log(`✅ Added column: ${col.add.split('ADD COLUMN ')[1]}`);
+        }
+      } catch (e) {
+        // Column might already exist or other error, continue
+        console.log(`ℹ️ Column check/add skipped: ${(e as Error).message}`);
+      }
+    }
+    
     console.log('✅ Migrations completed successfully');
     process.exit(0);
   } catch (error) {

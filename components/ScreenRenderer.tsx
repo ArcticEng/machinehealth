@@ -61,7 +61,7 @@ export default function ScreenRenderer({
         />
       );
     case 'record':
-      return <RecordSampleScreen onSaveSample={onSaveSample} />;
+      return <RecordSampleScreen onSaveSample={onSaveSample} onNavigate={onNavigate} />;
     case 'compare':
       return <CompareScreen />;
     case 'trends':

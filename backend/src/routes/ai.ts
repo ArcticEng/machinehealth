@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { query } from '../db';
-import { authenticate, AuthRequest } from '../middleware/auth';
+import { authenticate, AuthRequest, requireSubscription, SUBSCRIPTION_LEVELS } from '../middleware/auth';
 import { 
   analyzeVibrationComparison, 
   generateMaintenanceReport,
@@ -12,7 +12,8 @@ import { generateComparisonPDF } from '../services/pdf';
 const router = Router();
 
 // Analyze vibration comparison with AI
-router.post('/analyze', authenticate, async (req: AuthRequest, res: Response) => {
+// Level 1+ required for AI features
+router.post('/analyze', authenticate, requireSubscription(SUBSCRIPTION_LEVELS.BASIC), async (req: AuthRequest, res: Response) => {
   try {
     const { sampleId, machineId, baselineMetrics, currentMetrics } = req.body;
 
@@ -66,7 +67,8 @@ router.post('/analyze', authenticate, async (req: AuthRequest, res: Response) =>
 });
 
 // Save comparison analysis as PDF to S3
-router.post('/analyze/save', authenticate, async (req: AuthRequest, res: Response) => {
+// Level 1+ required
+router.post('/analyze/save', authenticate, requireSubscription(SUBSCRIPTION_LEVELS.BASIC), async (req: AuthRequest, res: Response) => {
   try {
     const { 
       machineId, 
@@ -196,7 +198,8 @@ router.post('/analyze/save', authenticate, async (req: AuthRequest, res: Respons
 });
 
 // Get saved comparisons for a machine
-router.get('/comparisons', authenticate, async (req: AuthRequest, res: Response) => {
+// Level 1+ required
+router.get('/comparisons', authenticate, requireSubscription(SUBSCRIPTION_LEVELS.BASIC), async (req: AuthRequest, res: Response) => {
   try {
     const { machineId, limit = '20' } = req.query;
     const userId = req.user!.id;
@@ -241,7 +244,8 @@ router.get('/comparisons', authenticate, async (req: AuthRequest, res: Response)
 });
 
 // Generate comprehensive report with AI
-router.post('/report', authenticate, async (req: AuthRequest, res: Response) => {
+// Level 1+ required
+router.post('/report', authenticate, requireSubscription(SUBSCRIPTION_LEVELS.BASIC), async (req: AuthRequest, res: Response) => {
   try {
     const { companyId, factoryId, period } = req.body;
     const userId = req.user!.id;
@@ -354,7 +358,8 @@ router.post('/report', authenticate, async (req: AuthRequest, res: Response) => 
 });
 
 // Interpret raw vibration data pattern
-router.post('/interpret', authenticate, async (req: AuthRequest, res: Response) => {
+// Level 1+ required for AI
+router.post('/interpret', authenticate, requireSubscription(SUBSCRIPTION_LEVELS.BASIC), async (req: AuthRequest, res: Response) => {
   try {
     const { rawData, machineType } = req.body;
 
@@ -375,7 +380,8 @@ router.post('/interpret', authenticate, async (req: AuthRequest, res: Response) 
 });
 
 // Quick health assessment
-router.post('/assess', authenticate, async (req: AuthRequest, res: Response) => {
+// Level 1+ required for AI
+router.post('/assess', authenticate, requireSubscription(SUBSCRIPTION_LEVELS.BASIC), async (req: AuthRequest, res: Response) => {
   try {
     const { machineId } = req.body;
 

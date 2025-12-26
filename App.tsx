@@ -6,6 +6,7 @@ import AppHeader from './components/AppHeader';
 import BottomNavigation from './components/BottomNavigation';
 import ScreenRenderer from './components/ScreenRenderer';
 import { getAuthToken, setAuthToken, authAPI } from './services/api';
+import { SubscriptionProvider } from './contexts/SubscriptionContext';
 import React from 'react';
 
 interface User {
@@ -15,6 +16,8 @@ interface User {
   lastName: string | null;
   role: string;
   subscriptionTier: string;
+  subscriptionLevel: number;
+  features: any;
 }
 
 export default function App() {
@@ -96,7 +99,7 @@ export default function App() {
     );
   }
 
-  return (
+  const appContent = (
     <div className={isDarkMode ? 'dark' : ''}>
       <div className="min-h-screen min-h-[100dvh] max-w-md mx-auto text-foreground flex flex-col bg-background">
         {isAuthenticated && (
@@ -144,4 +147,15 @@ export default function App() {
       </div>
     </div>
   );
+
+  // Wrap with SubscriptionProvider only if authenticated
+  if (isAuthenticated) {
+    return (
+      <SubscriptionProvider>
+        {appContent}
+      </SubscriptionProvider>
+    );
+  }
+
+  return appContent;
 }

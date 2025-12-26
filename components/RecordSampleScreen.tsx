@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Square, RotateCcw, Settings, Zap, Smartphone, AlertCircle, Activity } from 'lucide-react';
+import { Square, RotateCcw, Settings, Zap, Smartphone, AlertCircle, Activity, Lock, Crown } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
@@ -10,6 +10,7 @@ import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend } f
 import React from 'react';
 import accelerometerService, { AccelerometerData, AccelerometerMetrics } from '../services/accelerometer';
 import { machinesAPI } from '../services/api';
+import { useSubscription, SUBSCRIPTION_LEVELS } from '../contexts/SubscriptionContext';
 
 interface DataPoint {
   time: number;
@@ -26,9 +27,11 @@ interface Machine {
 
 interface RecordSampleScreenProps {
   onSaveSample: (sampleData: any) => void;
+  onNavigate?: (screen: string) => void;
 }
 
-export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenProps) {
+export default function RecordSampleScreen({ onSaveSample, onNavigate }: RecordSampleScreenProps) {
+  const { subscription, isFreeTier, canAccess } = useSubscription();
   const [isRecording, setIsRecording] = useState(false);
   const [displayData, setDisplayData] = useState<DataPoint[]>([]);
   const [allData, setAllData] = useState<AccelerometerData[]>([]);
@@ -40,12 +43,22 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [useMockData, setUseMockData] = useState(false);
   const [debugInfo, setDebugInfo] = useState<string>('');
+  const [hasRecorded, setHasRecorded] = useState(false);
   
   const allDataRef = useRef<AccelerometerData[]>([]);
   const recordingTimeRef = useRef(0);
 
-  // Load machines
+  const isFreeUser = isFreeTier();
+
+  // Load machines (only for paid users)
   useEffect(() => {
+    if (isFreeUser) {
+      // Free users don't need machines
+      setMachines([]);
+      setSelectedMachine('free-mode');
+      return;
+    }
+
     const loadMachines = async () => {
       try {
         const data = await machinesAPI.getAll();
@@ -55,6 +68,7 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
         }
       } catch (error) {
         console.error('Failed to load machines:', error);
+        // For demo/fallback
         setMachines([
           { id: 'mock-1', name: 'Conveyor Belt #1', factoryName: 'Factory Alpha' },
           { id: 'mock-2', name: 'Press Machine #3', factoryName: 'Factory Alpha' },
@@ -64,7 +78,7 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
       }
     };
     loadMachines();
-  }, []);
+  }, [isFreeUser]);
 
   // Check sensor availability on mount
   useEffect(() => {
@@ -116,9 +130,7 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
         setUseMockData(false);
       } else {
         console.log('No accelerometer data received - might need user interaction or not available');
-        // On Android, we might need user interaction first
-        // Don't immediately fall back to mock data
-        setSensorStatus('available'); // Assume available, will verify on record
+        setSensorStatus('available');
         setUseMockData(false);
       }
     };
@@ -212,6 +224,7 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
     setRecordingTime(0);
     setMetrics(null);
     setPermissionError(null);
+    setHasRecorded(false);
     
     // Handle iOS permission
     if (sensorStatus === 'permission-needed') {
@@ -250,6 +263,7 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
 
   const handleStop = () => {
     setIsRecording(false);
+    setHasRecorded(true);
     
     let finalData: AccelerometerData[];
     let calculatedMetrics: AccelerometerMetrics;
@@ -259,7 +273,6 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
       calculatedMetrics = accelerometerService.calculateMetrics(finalData);
     } else {
       finalData = accelerometerService.stopRecording();
-      // If no data from accelerometer, use what we collected via callback
       if (finalData.length === 0) {
         finalData = allDataRef.current;
       }
@@ -267,7 +280,14 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
     }
     
     setMetrics(calculatedMetrics);
+
+    // For FREE users: just stop and show metrics, don't go to save screen
+    if (isFreeUser) {
+      // Metrics are already displayed, nothing else to do
+      return;
+    }
     
+    // For PAID users: proceed to save screen
     const sampleData = {
       data: finalData,
       metrics: calculatedMetrics,
@@ -289,6 +309,7 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
     setIsRecording(false);
     setMetrics(null);
     setPermissionError(null);
+    setHasRecorded(false);
     
     if (!useMockData) {
       accelerometerService.stopRecording();
@@ -303,6 +324,9 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
 
   const currentMetrics = metrics || accelerometerService.calculateMetrics(allData);
 
+  // Check if user can record (free users always can, paid users need a machine selected)
+  const canRecord = isFreeUser || (selectedMachine && selectedMachine !== '');
+
   return (
     <div className="p-4 space-y-6 pb-20 min-h-screen bg-gradient-to-br from-background to-accent/10">
       {/* Header */}
@@ -313,6 +337,16 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
         className="space-y-4"
       >
         <h1 className="text-2xl font-semibold">Record Sample</h1>
+        
+        {/* Free User Notice */}
+        {isFreeUser && (
+          <Alert className="border-amber-500/50 bg-amber-500/10">
+            <Activity className="h-4 w-4 text-amber-500" />
+            <AlertDescription className="text-amber-700 dark:text-amber-300">
+              <strong>Free Mode:</strong> Record samples and view real-time metrics. Upgrade to save data and access AI analysis.
+            </AlertDescription>
+          </Alert>
+        )}
         
         {/* Sensor Status Info */}
         {sensorStatus === 'checking' && (
@@ -347,32 +381,49 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
           </Alert>
         )}
         
-        {/* Machine Selection */}
-        <div className="flex items-center gap-4">
-          <div className="flex-1">
-            <Select value={selectedMachine} onValueChange={setSelectedMachine}>
-              <SelectTrigger className="bg-input-background">
-                <SelectValue placeholder="Select machine" />
-              </SelectTrigger>
-              <SelectContent>
-                {machines.map((machine) => (
-                  <SelectItem key={machine.id} value={machine.id}>
-                    {machine.name} ({machine.factoryName})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+        {/* Machine Selection - Only for paid users */}
+        {!isFreeUser && (
+          <div className="flex items-center gap-4">
+            <div className="flex-1">
+              <Select value={selectedMachine} onValueChange={setSelectedMachine}>
+                <SelectTrigger className="bg-white dark:bg-background text-foreground">
+                  <SelectValue placeholder="Select machine" />
+                </SelectTrigger>
+                <SelectContent className="bg-white dark:bg-popover">
+                  {machines.map((machine) => (
+                    <SelectItem key={machine.id} value={machine.id} className="text-foreground">
+                      {machine.name} ({machine.factoryName})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <Button 
+              variant="outline" 
+              size="icon"
+              onClick={toggleMockMode}
+              title={useMockData ? "Using Demo Data" : "Using Real Sensor"}
+            >
+              {useMockData ? <Smartphone className="h-4 w-4 text-yellow-500" /> : <Activity className="h-4 w-4 text-green-500" />}
+            </Button>
           </div>
-          
-          <Button 
-            variant="outline" 
-            size="icon"
-            onClick={toggleMockMode}
-            title={useMockData ? "Using Demo Data" : "Using Real Sensor"}
-          >
-            {useMockData ? <Smartphone className="h-4 w-4 text-yellow-500" /> : <Activity className="h-4 w-4 text-green-500" />}
-          </Button>
-        </div>
+        )}
+
+        {/* Free user - just show mode toggle */}
+        {isFreeUser && (
+          <div className="flex items-center justify-end">
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={toggleMockMode}
+              className="gap-2"
+            >
+              {useMockData ? <Smartphone className="h-4 w-4 text-yellow-500" /> : <Activity className="h-4 w-4 text-green-500" />}
+              {useMockData ? 'Demo Mode' : 'Real Sensor'}
+            </Button>
+          </div>
+        )}
 
         {/* Status Bar */}
         <div className="flex items-center justify-between">
@@ -383,12 +434,11 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
             >
               {isRecording ? '● Recording' : 'Idle'}
             </Badge>
-            <Badge 
-              variant="outline" 
-              className={useMockData ? "text-yellow-500 border-yellow-500/20" : "text-green-500 border-green-500/20"}
-            >
-              {useMockData ? 'Demo Mode' : 'Real Sensor'}
-            </Badge>
+            {isFreeUser && (
+              <Badge variant="outline" className="text-amber-500 border-amber-500/20">
+                Free Plan
+              </Badge>
+            )}
             <span className="text-sm text-muted-foreground">
               {recordingTime.toFixed(1)}s
             </span>
@@ -397,11 +447,6 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
             {allData.length} samples
           </span>
         </div>
-
-        {/* Debug Info (remove in production) */}
-        {debugInfo && (
-          <p className="text-xs text-muted-foreground">{debugInfo}</p>
-        )}
       </motion.div>
 
       {/* Live Data Chart */}
@@ -500,7 +545,7 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
                   : 'bg-gray-500 hover:bg-gray-600'
                 } text-white transition-all duration-300`}
                 onClick={handleRecord}
-                disabled={isRecording || !selectedMachine}
+                disabled={isRecording || !canRecord}
               >
                 <Activity className="h-5 w-5 mr-2" />
                 Record
@@ -514,7 +559,7 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
                 className="border-red-500/50 hover:border-red-500 hover:bg-red-500/10"
               >
                 <Square className="h-5 w-5 mr-2" />
-                Stop & Save
+                {isFreeUser ? 'Stop' : 'Stop & Save'}
               </Button>
 
               <Button
@@ -614,6 +659,36 @@ export default function RecordSampleScreen({ onSaveSample }: RecordSampleScreenP
               </CardContent>
             </Card>
           </div>
+        </motion.div>
+      )}
+
+      {/* Upgrade CTA for Free Users after recording */}
+      {isFreeUser && hasRecorded && allData.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6, delay: 0.4 }}
+        >
+          <Card className="border-primary/30 bg-gradient-to-r from-primary/10 to-purple-500/10">
+            <CardContent className="p-6 text-center space-y-4">
+              <div className="mx-auto w-12 h-12 rounded-full bg-primary/20 flex items-center justify-center">
+                <Crown className="h-6 w-6 text-primary" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-lg">Want to save this data?</h3>
+                <p className="text-muted-foreground text-sm mt-1">
+                  Upgrade to Basic to save samples, track trends over time, and get AI-powered analysis.
+                </p>
+              </div>
+              <Button 
+                className="bg-gradient-to-r from-primary to-purple-600 hover:opacity-90"
+                onClick={() => onNavigate?.('subscription')}
+              >
+                <Crown className="h-4 w-4 mr-2" />
+                Upgrade Now
+              </Button>
+            </CardContent>
+          </Card>
         </motion.div>
       )}
     </div>

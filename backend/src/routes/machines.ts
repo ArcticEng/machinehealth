@@ -1,13 +1,21 @@
 import { Router, Response } from 'express';
 import { body, validationResult } from 'express-validator';
 import { query } from '../db';
-import { authenticate, AuthRequest } from '../middleware/auth';
+import { authenticate, AuthRequest, requireSubscription, SUBSCRIPTION_LEVELS, checkMachineLimit, getUserFeatures } from '../middleware/auth';
 
 const router = Router();
 
 // Get all machines for authenticated user
+// Level 1+ required to view machines (Free users don't have machines)
 router.get('/', authenticate, async (req: AuthRequest, res: Response) => {
   try {
+    const userLevel = req.user!.subscription_level || 0;
+    
+    // Free users can't access machines
+    if (userLevel < SUBSCRIPTION_LEVELS.BASIC) {
+      return res.json([]); // Return empty array for free users
+    }
+
     const { factoryId, companyId, status } = req.query;
     
     let sql = `
@@ -69,7 +77,8 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response) => {
 });
 
 // Get single machine with details
-router.get('/:id', authenticate, async (req: AuthRequest, res: Response) => {
+// Level 1+ required
+router.get('/:id', authenticate, requireSubscription(SUBSCRIPTION_LEVELS.BASIC), async (req: AuthRequest, res: Response) => {
   try {
     const result = await query(
       `SELECT m.*, f.name as factory_name, f.location as factory_location, 
@@ -135,9 +144,11 @@ router.get('/:id', authenticate, async (req: AuthRequest, res: Response) => {
 });
 
 // Create machine
+// Level 1+ required, with machine limit check
 router.post(
   '/',
   authenticate,
+  requireSubscription(SUBSCRIPTION_LEVELS.BASIC),
   [
     body('factoryId').isUUID(),
     body('name').notEmpty().trim(),
@@ -151,6 +162,21 @@ router.post(
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
+      }
+
+      const userLevel = req.user!.subscription_level || 0;
+      const userId = req.user!.id;
+
+      // Check machine limit for Basic users
+      const limitCheck = await checkMachineLimit(userId, userLevel);
+      if (!limitCheck.allowed) {
+        return res.status(403).json({
+          error: 'Machine limit reached',
+          message: `Your plan allows up to ${limitCheck.limit} machines. You currently have ${limitCheck.current}. Please upgrade to Premium for unlimited machines.`,
+          current: limitCheck.current,
+          limit: limitCheck.limit,
+          requiredLevel: SUBSCRIPTION_LEVELS.PREMIUM
+        });
       }
 
       const { factoryId, name, type, model, serialNumber, description } = req.body;
@@ -196,9 +222,11 @@ router.post(
 );
 
 // Update machine
+// Level 1+ required
 router.put(
   '/:id',
   authenticate,
+  requireSubscription(SUBSCRIPTION_LEVELS.BASIC),
   [
     body('name').optional().trim(),
     body('type').optional().trim(),
@@ -261,7 +289,8 @@ router.put(
 );
 
 // Delete machine
-router.delete('/:id', authenticate, async (req: AuthRequest, res: Response) => {
+// Level 1+ required
+router.delete('/:id', authenticate, requireSubscription(SUBSCRIPTION_LEVELS.BASIC), async (req: AuthRequest, res: Response) => {
   try {
     // Check access
     const accessCheck = await query(
