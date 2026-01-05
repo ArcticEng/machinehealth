@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from "framer-motion";
 import { type Screen } from './constants/navigation';
 import { shouldShowBottomNav, shouldShowBackButton, getBackNavigationTarget } from './utils/navigation';
@@ -50,6 +50,42 @@ export default function App() {
     checkAuth();
   }, []);
 
+  // Handle browser back button
+  const handlePopState = useCallback((event: PopStateEvent) => {
+    const state = event.state;
+    if (state && state.screen) {
+      // Navigate to the screen from history without pushing new state
+      setCurrentScreen(state.screen);
+    } else if (isAuthenticated) {
+      // No state, go to home
+      setCurrentScreen('home');
+    }
+  }, [isAuthenticated]);
+
+  // Set up popstate listener for browser back button
+  useEffect(() => {
+    window.addEventListener('popstate', handlePopState);
+    
+    // Initialize history state with current screen
+    if (!window.history.state?.screen) {
+      window.history.replaceState({ screen: currentScreen }, '', window.location.href);
+    }
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [handlePopState, currentScreen]);
+
+  // Custom navigation function that manages browser history
+  const navigateToScreen = useCallback((screen: Screen) => {
+    // Don't push duplicate states
+    if (screen === currentScreen) return;
+    
+    // Push new state to browser history
+    window.history.pushState({ screen }, '', window.location.href);
+    setCurrentScreen(screen);
+  }, [currentScreen]);
+
   const toggleDarkMode = () => {
     setIsDarkMode(!isDarkMode);
     document.documentElement.classList.toggle('dark');
@@ -58,6 +94,8 @@ export default function App() {
   const handleLogin = (userData: User) => {
     setUser(userData);
     setIsAuthenticated(true);
+    // Replace state instead of push for login
+    window.history.replaceState({ screen: 'home' }, '', window.location.href);
     setCurrentScreen('home');
   };
 
@@ -65,6 +103,8 @@ export default function App() {
     setAuthToken(null);
     setUser(null);
     setIsAuthenticated(false);
+    // Replace state instead of push for logout
+    window.history.replaceState({ screen: 'login' }, '', window.location.href);
     setCurrentScreen('login');
   };
 
@@ -72,18 +112,23 @@ export default function App() {
   const showBackButton = shouldShowBackButton(currentScreen, isAuthenticated);
 
   const goBack = () => {
-    const targetScreen = getBackNavigationTarget(currentScreen);
-    setCurrentScreen(targetScreen);
+    // Use browser's back if we have history, otherwise use app logic
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      const targetScreen = getBackNavigationTarget(currentScreen);
+      navigateToScreen(targetScreen);
+    }
   };
 
   const handleNavigateToAssets = (tab: 'companies' | 'factories' | 'machines') => {
     setAssetTab(tab);
-    setCurrentScreen('assets');
+    navigateToScreen('assets');
   };
 
   const handleSaveSample = (sampleData: any) => {
     setRecordedSampleData(sampleData);
-    setCurrentScreen('save-sample');
+    navigateToScreen('save-sample');
   };
 
   // Show loading state
@@ -127,7 +172,7 @@ export default function App() {
                 currentScreen={currentScreen}
                 assetTab={assetTab}
                 recordedSampleData={recordedSampleData}
-                onNavigate={setCurrentScreen}
+                onNavigate={navigateToScreen}
                 onLogin={handleLogin}
                 onNavigateToAssets={handleNavigateToAssets}
                 onSaveSample={handleSaveSample}
@@ -141,7 +186,7 @@ export default function App() {
         {showBottomNav && (
           <BottomNavigation 
             currentScreen={currentScreen}
-            onNavigate={setCurrentScreen}
+            onNavigate={navigateToScreen}
           />
         )}
       </div>
